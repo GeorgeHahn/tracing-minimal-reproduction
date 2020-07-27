@@ -1,0 +1,95 @@
+use opentelemetry::api::Provider;
+use opentelemetry::sdk;
+use std::{sync::mpsc, thread};
+use tracing::*;
+use tracing_core::Dispatch;
+use tracing_subscriber::{layer::SubscriberExt, reload, EnvFilter};
+
+pub fn create_subscriber<S: AsRef<str>>(
+    endpoint: S,
+    filter: S,
+) -> Result<
+    (
+        Dispatch,
+        Box<dyn Fn(EnvFilter) -> Result<(), tracing_subscriber::reload::Error> + Send + Sync>,
+    ),
+    (),
+> {
+    let exporter = opentelemetry_jaeger::Exporter::builder()
+        .with_agent_endpoint(endpoint.as_ref().parse().unwrap())
+        .with_process(opentelemetry_jaeger::Process {
+            service_name: "min-repr".to_string(),
+            tags: Vec::new(),
+        })
+        .init()
+        .unwrap();
+    let provider = sdk::Provider::builder()
+        .with_simple_exporter(exporter)
+        .with_config(sdk::Config {
+            default_sampler: Box::new(sdk::Sampler::Always),
+            ..Default::default()
+        })
+        .build();
+    let tracer = provider.get_tracer("tracing");
+
+    let opentelemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+
+    let (filter, handle) = reload::Layer::new(EnvFilter::new(filter));
+
+    let subscriber = tracing_subscriber::registry()
+        .with(opentelemetry)
+        .with(filter);
+
+    let dispatch = Dispatch::new(subscriber);
+
+    let change_level = Box::new(move |new_filter| handle.clone().reload(new_filter));
+
+    Ok((dispatch, change_level))
+}
+
+fn main() {
+    let filter = "warn";
+    let (dispatch, reload) =
+        create_subscriber("127.0.0.1:6831", filter).expect("create subscriber");
+    let d2 = dispatch.clone();
+    tracing::dispatcher::set_global_default(d2).expect("set default dispatch");
+
+    // Nothing here is printed (filter is at warn)
+    {
+        let s = info_span!("thread1-before");
+        let _g = s.enter();
+        trace!("trace");
+        debug!("debug");
+        info!("info");
+    }
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        // Reload to `trace` level filter
+        (reload)(EnvFilter::new("trace")).expect("reload filter");
+        tx.send(()).expect("send complete signal");
+
+        // All of these should emit. They do.
+        {
+            let s = info_span!("thread2-after");
+            let _g = s.enter();
+            trace!("trace");
+            debug!("debug");
+            info!("info");
+            warn!("warn");
+            error!("error");
+        }
+    });
+    rx.recv().expect("receive complete signal");
+
+    // All of these should emit. They sometimes do.
+    {
+        let s = info_span!("thread1-after");
+        let _g = s.enter();
+        trace!("trace");
+        debug!("debug");
+        info!("info");
+        warn!("warn");
+        error!("error");
+    }
+}
