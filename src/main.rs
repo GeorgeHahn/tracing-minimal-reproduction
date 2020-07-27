@@ -1,56 +1,28 @@
-use opentelemetry::api::Provider;
-use opentelemetry::sdk;
 use std::{sync::mpsc, thread};
 use tracing::*;
 use tracing_core::Dispatch;
-use tracing_subscriber::{layer::SubscriberExt, reload, EnvFilter};
+use tracing_subscriber::{EnvFilter, reload, prelude::*};
 
-pub fn create_subscriber<S: AsRef<str>>(
-    endpoint: S,
-    filter: S,
-) -> Result<
-    (
+pub fn create_subscriber(
+    filter: &'_ str,
+) -> (
         Dispatch,
         Box<dyn Fn(EnvFilter) -> Result<(), tracing_subscriber::reload::Error> + Send + Sync>,
-    ),
-    (),
-> {
-    let exporter = opentelemetry_jaeger::Exporter::builder()
-        .with_agent_endpoint(endpoint.as_ref().parse().unwrap())
-        .with_process(opentelemetry_jaeger::Process {
-            service_name: "min-repr".to_string(),
-            tags: Vec::new(),
-        })
-        .init()
-        .unwrap();
-    let provider = sdk::Provider::builder()
-        .with_simple_exporter(exporter)
-        .with_config(sdk::Config {
-            default_sampler: Box::new(sdk::Sampler::Always),
-            ..Default::default()
-        })
-        .build();
-    let tracer = provider.get_tracer("tracing");
-
-    let opentelemetry = tracing_opentelemetry::layer().with_tracer(tracer);
-
+    )
+{
+    let fmt = tracing_subscriber::fmt::layer();
     let (filter, handle) = reload::Layer::new(EnvFilter::new(filter));
-
     let subscriber = tracing_subscriber::registry()
-        .with(opentelemetry)
+        .with(fmt)
         .with(filter);
-
     let dispatch = Dispatch::new(subscriber);
-
-    let change_level = Box::new(move |new_filter| handle.clone().reload(new_filter));
-
-    Ok((dispatch, change_level))
+    let change_level = Box::new(move |filter| handle.clone().reload(filter));
+    (dispatch, change_level)
 }
 
 fn main() {
     let filter = "warn";
-    let (dispatch, reload) =
-        create_subscriber("127.0.0.1:6831", filter).expect("create subscriber");
+    let (dispatch, reload) = create_subscriber(filter);
     let d2 = dispatch.clone();
     tracing::dispatcher::set_global_default(d2).expect("set default dispatch");
 
@@ -82,7 +54,7 @@ fn main() {
     });
     rx.recv().expect("receive complete signal");
 
-    // All of these should emit. They sometimes do.
+    // All of these should emit. They do.
     {
         let s = info_span!("thread1-after");
         let _g = s.enter();

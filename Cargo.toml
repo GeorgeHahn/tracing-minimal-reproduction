@@ -5,8 +5,6 @@ authors = ["George Hahn <george.hahn@netlify.com>"]
 edition = "2018"
 
 [dependencies]
-opentelemetry = { version = "0.6" }
-opentelemetry-jaeger = { version = "0.5" }
 tracing = "0.1"
 tracing-core = "0.1"
 tracing-futures = "0.2"
