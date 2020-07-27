@@ -1,6 +1,6 @@
 use opentelemetry::api::Provider;
 use opentelemetry::sdk;
-use std::{sync::mpsc, thread};
+use std::{sync::{Arc, mpsc}, thread};
 use tracing::*;
 use tracing_core::Dispatch;
 use tracing_subscriber::{layer::SubscriberExt, reload, EnvFilter};
@@ -56,22 +56,24 @@ fn main() {
 
     // Nothing here is printed (filter is at warn)
     {
-        let s = info_span!("thread1-before");
+        let s = info_span!("0-doesn't print-thread1");
         let _g = s.enter();
         trace!("trace");
         debug!("debug");
         info!("info");
     }
+    let reload = Arc::new(reload);
 
+    let reload2 = reload.clone();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         // Reload to `trace` level filter
-        (reload)(EnvFilter::new("trace")).expect("reload filter");
+        (reload2)(EnvFilter::new("trace")).expect("reload filter");
         tx.send(()).expect("send complete signal");
 
         // All of these should emit. They do.
         {
-            let s = info_span!("thread2-after");
+            let s = info_span!("1-always-thread2");
             let _g = s.enter();
             trace!("trace");
             debug!("debug");
@@ -84,7 +86,53 @@ fn main() {
 
     // All of these should emit. They sometimes do.
     {
-        let s = info_span!("thread1-after");
+        let s = info_span!("2-sometimes-thread1");
+        let _g = s.enter();
+        trace!("trace");
+        debug!("debug");
+        info!("info");
+        warn!("warn");
+        error!("error");
+    }
+
+    // Reload to `trace` level filter
+    (reload.clone())(EnvFilter::new("trace")).expect("reload filter");
+
+    let reload2 = reload.clone();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        // Comment this block out to get racy behavior for step 3.
+        // {
+        //     let s = info_span!("2.5-sometimes-thread3");
+        //     let _g = s.enter();
+        //     trace!("trace");
+        //     debug!("debug");
+        //     info!("info");
+        //     warn!("warn");
+        //     error!("error");
+        // }
+
+        // Reload to `trace` level filter
+        (reload2)(EnvFilter::new("trace")).expect("reload filter");
+        tx.send(()).expect("send complete signal");
+
+        // All of these should emit. They usually don't if the block above is commented out ("2.5"). They sometimes
+        // don't even when that block is uncommented.
+        {
+            let s = info_span!("3-sometimes-thread3");
+            let _g = s.enter();
+            trace!("trace");
+            debug!("debug");
+            info!("info");
+            warn!("warn");
+            error!("error");
+        }
+    });
+    rx.recv().expect("receive complete signal");
+
+    // All of these should emit. They do.
+    {
+        let s = info_span!("4-always-thread1");
         let _g = s.enter();
         trace!("trace");
         debug!("debug");
