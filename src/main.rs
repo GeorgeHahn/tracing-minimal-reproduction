@@ -66,7 +66,7 @@ fn main() {
 
     let reload2 = reload.clone();
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
+    let t1 = thread::spawn(move || {
         // Reload to `trace` level filter
         (reload2)(EnvFilter::new("trace")).expect("reload filter");
         tx.send(()).expect("send complete signal");
@@ -100,7 +100,7 @@ fn main() {
 
     let reload2 = reload.clone();
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
+    let t2 = thread::spawn(move || {
         // Comment this block out to get racy behavior for step 3.
         // {
         //     let s = info_span!("2.5-sometimes-thread3");
@@ -140,4 +140,7 @@ fn main() {
         warn!("warn");
         error!("error");
     }
+
+    t1.join().expect("join thread 1");
+    t2.join().expect("join thread 2");
 }
